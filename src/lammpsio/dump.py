@@ -253,6 +253,19 @@ class DumpFile:
                 line = _readline(f)
                 line_num += 1
 
+    def _process_missing_position(self, snap, position_s, position_su, position_u):
+        img = None
+        if "position_s" in self.schema:
+            snap.position = snap.box.unscale(position_s)
+        elif "position_su" in self.schema:
+            xs, img = snap.box.wrap_scaled(position_su)
+            snap.position = snap.box.unscale(xs)
+        elif "position_u" in self.schema:
+            x, img = snap.box.wrap(position_u)
+            snap.position = x
+        if "image" not in self.schema and img is not None:
+            snap.image = img
+
     def __len__(self):
         if self._frames is None:
             self._find_frames()
@@ -322,6 +335,15 @@ class DumpFile:
                             "x": ("position", 0),
                             "y": ("position", 1),
                             "z": ("position", 2),
+                            "xs": ("position_s", 0),
+                            "ys": ("position_s", 1),
+                            "zs": ("position_s", 2),
+                            "xu": ("position_u", 0),
+                            "yu": ("position_u", 1),
+                            "zu": ("position_u", 2),
+                            "xsu": ("position_su", 0),
+                            "ysu": ("position_su", 1),
+                            "zsu": ("position_su", 2),
                             "ix": ("image", 0),
                             "iy": ("image", 1),
                             "iz": ("image", 2),
@@ -344,12 +366,15 @@ class DumpFile:
                                 else:
                                     schema[key] = i
                         # validate tuple
-                        for key in ("position", "velocity", "image"):
+                        for key in ("position", "position_s", "position_u", "position_su", "velocity", "image"):
                             if key in schema and any(x is None for x in schema[key]):
                                 raise IOError("lammpsio requires 3-element vectors")
                         self.schema = schema
 
                     snap = Snapshot(N, box, step)
+                    position_s = numpy.zeros((N, 3), dtype=float) if "position_s" in self.schema else None
+                    position_su = numpy.zeros((N, 3), dtype=float) if "position_su" in self.schema else None
+                    position_u = numpy.zeros((N, 3), dtype=float) if "position_u" in self.schema else None
                     for i in range(snap.N):
                         atom = _readline(f, True)
                         atom = atom.split()
@@ -361,6 +386,18 @@ class DumpFile:
                         if "position" in self.schema:
                             snap.position[i] = [
                                 float(atom[j]) for j in self.schema["position"]
+                            ]
+                        if "position_s" in self.schema:
+                            position_s[i] = [
+                                float(atom[j]) for j in self.schema["position_s"]
+                            ]
+                        if "position_u" in self.schema:
+                            position_u[i] = [
+                                float(atom[j]) for j in self.schema["position_u"]
+                            ]
+                        if "position_su" in self.schema:
+                            position_su[i] = [
+                                float(atom[j]) for j in self.schema["position_su"]
                             ]
                         if "velocity" in self.schema:
                             snap.velocity[i] = [
@@ -379,6 +416,9 @@ class DumpFile:
 
                 # final processing stage for the frame
                 if state == 4:
+                    if "position" not in self.schema:
+                        self._process_missing_position(snap, position_s, position_su, position_u)
+
                     # optionally sort the particles by ID
                     if self.sort_ids and snap.has_id():
                         snap.reorder(numpy.argsort(snap.id), check_order=False)
@@ -412,7 +452,7 @@ class DumpFile:
                             snap.mass = self._copy_from.mass[copy_id]
 
                     yield snap
-                    del snap, N, box, step
+                    del snap, N, box, step, position_s, position_su, position_u
                     state = 0
 
                 line = _readline(f)
